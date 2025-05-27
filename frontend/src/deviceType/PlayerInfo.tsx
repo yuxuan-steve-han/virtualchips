@@ -33,6 +33,8 @@ export default function PlayerInfo({
     const elementRef = useRef<HTMLDivElement>(null);
     const dragStartRef = useRef<Position>({ x: 0, y: 0 });
     const currentPositionRef = useRef<Position>({ x: 0, y: 0 });
+    const hasBeenDraggedRef = useRef(false);
+    const lastViewportRef = useRef({ width: window.innerWidth, height: window.innerHeight });
 
     const [claimAmount, setClaimAmount] = useState(0);
 
@@ -58,52 +60,81 @@ export default function PlayerInfo({
         setRotation(rotationDegrees);
     }, [playerIndex, totalPlayers, centerPoint.x, centerPoint.y]);
 
+    // Unified move handler for both mouse and touch
+    const handleMove = (clientX: number, clientY: number) => {
+        if (!isDragging || !elementRef.current) return;
+        
+        // Calculate the new position
+        const deltaX = clientX - dragStartRef.current.x;
+        const deltaY = clientY - dragStartRef.current.y;
+        
+        const newX = currentPositionRef.current.x + deltaX;
+        const newY = currentPositionRef.current.y + deltaY;
+        
+        setPosition({
+            x: newX,
+            y: newY
+        });
+        
+        // Get actual element dimensions
+        const rect = elementRef.current.getBoundingClientRect();
+        const elementWidth = rect.width;
+        const elementHeight = rect.height;
+        
+        // Calculate rotation based on new position relative to center
+        const elementCenterX = newX + elementWidth / 2;
+        const elementCenterY = newY + elementHeight / 2;
+        
+        const angleToCenter = Math.atan2(
+            elementCenterY - centerPoint.y,
+            elementCenterX - centerPoint.x
+        );
+        
+        // Convert to degrees and add 90 to face away from center
+        const rotationDegrees = (angleToCenter * 180 / Math.PI) + 90;
+        setRotation(rotationDegrees);
+    };
+
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging || !elementRef.current) return;
-            
             e.preventDefault();
-            
-            // Calculate the new position
-            const deltaX = e.clientX - dragStartRef.current.x;
-            const deltaY = e.clientY - dragStartRef.current.y;
-            
-            const newX = currentPositionRef.current.x + deltaX;
-            const newY = currentPositionRef.current.y + deltaY;
-            
-            setPosition({
-                x: newX,
-                y: newY
-            });
-            
-            // Calculate rotation based on new position relative to center
-            const elementCenterX = newX + 75; // Half of approximate element width
-            const elementCenterY = newY + 50; // Half of approximate element height
-            
-            const angleToCenter = Math.atan2(
-                elementCenterY - centerPoint.y,
-                elementCenterX - centerPoint.x
-            );
-            
-            // Convert to degrees and add 90 to face away from center
-            const rotationDegrees = (angleToCenter * 180 / Math.PI) + 90;
-            setRotation(rotationDegrees);
+            handleMove(e.clientX, e.clientY);
         };
 
-        const handleMouseUp = () => {
+        const handleTouchMove = (e: TouchEvent) => {
+            e.preventDefault();
+            if (e.touches.length > 0) {
+                handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        };
+
+        const handleEnd = () => {
             setIsDragging(false);
             // Update the position ref when dragging ends
             currentPositionRef.current = position;
+            hasBeenDraggedRef.current = true;
         };
 
         if (isDragging) {
+            // Mouse events
             document.addEventListener('mousemove', handleMouseMove);
-            document.addEventListener('mouseup', handleMouseUp);
+            document.addEventListener('mouseup', handleEnd);
+            
+            // Touch events
+            document.addEventListener('touchmove', handleTouchMove, { passive: false });
+            document.addEventListener('touchend', handleEnd);
+            document.addEventListener('touchcancel', handleEnd);
         }
 
         return () => {
+            // Mouse events
             document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
+            document.removeEventListener('mouseup', handleEnd);
+            
+            // Touch events
+            document.removeEventListener('touchmove', handleTouchMove);
+            document.removeEventListener('touchend', handleEnd);
+            document.removeEventListener('touchcancel', handleEnd);
         };
     }, [isDragging, centerPoint.x, centerPoint.y, position]);
 
@@ -117,25 +148,70 @@ export default function PlayerInfo({
         currentPositionRef.current = position;
     };
 
+    const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        if (e.touches.length > 0) {
+            setIsDragging(true);
+            dragStartRef.current = {
+                x: e.touches[0].clientX,
+                y: e.touches[0].clientY
+            };
+            currentPositionRef.current = position;
+        }
+    };
+
     // Handle window resize
     useEffect(() => {
         const handleResize = () => {
-            // Recalculate position when window resizes
-            const radiusX = Math.min(window.innerWidth * 0.35, 400);
-            const radiusY = Math.min(window.innerHeight * 0.25, 200);
+            const newWidth = window.innerWidth;
+            const newHeight = window.innerHeight;
             
-            const angleStep = (2 * Math.PI) / totalPlayers;
-            const angle = angleStep * playerIndex - Math.PI / 2;
+            // If the element has been manually dragged, scale its position proportionally
+            if (hasBeenDraggedRef.current) {
+                const widthRatio = newWidth / lastViewportRef.current.width;
+                const heightRatio = newHeight / lastViewportRef.current.height;
+                
+                const scaledX = currentPositionRef.current.x * widthRatio;
+                const scaledY = currentPositionRef.current.y * heightRatio;
+                
+                setPosition({ x: scaledX, y: scaledY });
+                currentPositionRef.current = { x: scaledX, y: scaledY };
+                
+                // Update rotation based on new position
+                if (elementRef.current) {
+                    const rect = elementRef.current.getBoundingClientRect();
+                    const elementCenterX = scaledX + rect.width / 2;
+                    const elementCenterY = scaledY + rect.height / 2;
+                    
+                    const angleToCenter = Math.atan2(
+                        elementCenterY - newHeight / 2,
+                        elementCenterX - newWidth / 2
+                    );
+                    
+                    const rotationDegrees = (angleToCenter * 180 / Math.PI) + 90;
+                    setRotation(rotationDegrees);
+                }
+            } else {
+                // Recalculate default position when window resizes
+                const radiusX = Math.min(newWidth * 0.35, 400);
+                const radiusY = Math.min(newHeight * 0.25, 200);
+                
+                const angleStep = (2 * Math.PI) / totalPlayers;
+                const angle = angleStep * playerIndex - Math.PI / 2;
+                
+                const x = newWidth / 2 + radiusX * Math.cos(angle) - 75;
+                const y = newHeight / 2 + radiusY * Math.sin(angle) - 50;
+                
+                setPosition({ x, y });
+                currentPositionRef.current = { x, y };
+                
+                // Simple rotation calculation
+                const rotationDegrees = (angle * 180 / Math.PI) + 90;
+                setRotation(rotationDegrees);
+            }
             
-            const x = window.innerWidth / 2 + radiusX * Math.cos(angle) - 75;
-            const y = window.innerHeight / 2 + radiusY * Math.sin(angle) - 50;
-            
-            setPosition({ x, y });
-            currentPositionRef.current = { x, y };
-            
-            // Simple rotation calculation
-            const rotationDegrees = (angle * 180 / Math.PI) + 90;
-            setRotation(rotationDegrees);
+            // Update viewport reference
+            lastViewportRef.current = { width: newWidth, height: newHeight };
         };
 
         window.addEventListener('resize', handleResize);
@@ -148,6 +224,7 @@ export default function PlayerInfo({
                 ref={elementRef}
                 className="player-info" 
                 onMouseDown={handleMouseDown}
+                onTouchStart={handleTouchStart}
                 style={{ 
                     position: "absolute", 
                     backgroundColor: "#f0f0f0", 
@@ -159,6 +236,7 @@ export default function PlayerInfo({
                     transformOrigin: "center center",
                     cursor: isDragging ? "grabbing" : "grab",
                     userSelect: "none",
+                    touchAction: "none", // Prevent default touch behavior
                     transition: isDragging ? "none" : "transform 0.3s ease"
                 }}
             >
@@ -174,24 +252,32 @@ export default function PlayerInfo({
             style={{ 
                 position: "absolute", 
                 backgroundColor: "#204533", 
-                padding: "10px", 
+                padding: "5px", 
                 borderRadius: "5px",
                 left: `${position.x}px`,
                 top: `${position.y}px`,
                 transform: `rotate(${rotation+180}deg)`,
                 transformOrigin: "center center",
                 userSelect: "none",
+                touchAction: "none", // Prevent default touch behavior
                 zIndex: isDragging ? 1000 : 1,
                 transition: isDragging ? "none" : "transform 0.3s ease",
                 minWidth: "150px",
                 boxShadow: "0 2px 8px rgba(0,0,0,0.3)"
             }}
         >
-            <div className="rotate-180 border-t-2 border-white mb-2" onMouseDown={handleMouseDown}
-                style={{ cursor: isDragging ? "grabbing" : "grab" }}
+            <div 
+                className="rotate-180 border-t-2 border-white mb-2" 
+                onMouseDown={handleMouseDown}
+                onTouchStart={handleTouchStart}
+                style={{ 
+                    cursor: isDragging ? "grabbing" : "grab",
+                    WebkitTouchCallout: "none", // iOS Safari
+                    WebkitUserSelect: "none", // Safari
+                }}
             >
                 <h2 className='text-center text-xl'>{playerName}</h2>
-                <p className="text-blue-400 text-3xl">Turn Bet: {gameStatus?.players[playerName].turnBet}</p>
+                <p className="text-blue-400 text-2xl text-center">{gameStatus?.players[playerName].turnBet}</p>
                 { gameStatus?.players[playerName].turnBet > 0 && (
                     <DisplayChips scaleMultiplier={20} amount={gameStatus?.players[playerName].turnBet || 0} />
                 )}
